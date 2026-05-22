@@ -492,7 +492,7 @@ class User(ModelObjectType[models.User]):
         doc_category = DOC_CATEGORY_USERS
 
     @staticmethod
-    def resolve_full_name(root: models.User, _info: ResolveInfo):
+    def resolve_full_name(root: models.User, _info: ResolveInfo) -> str:
         return root.get_full_name()
 
     @staticmethod

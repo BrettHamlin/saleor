@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal
 from pathlib import Path
 from unittest import mock
@@ -135,8 +136,10 @@ def test_me_full_name_uses_model_fallback(user_api_client, address):
     # harness:criterion=c-fullname-resolver-delegates-to-model
     # given
     user = user_api_client.user
-    address.first_name = "Mary"
-    address.last_name = "Jackson"
+    first_name = "Mary"
+    last_name = "Jackson"
+    address.first_name = first_name
+    address.last_name = last_name
     address.save(update_fields=["first_name", "last_name"])
     user.first_name = ""
     user.last_name = ""
@@ -150,7 +153,9 @@ def test_me_full_name_uses_model_fallback(user_api_client, address):
 
     # then
     content = get_graphql_content(response)
-    assert content["data"]["me"]["fullName"] == user.get_full_name()
+    expected_full_name = user.get_full_name()
+    assert expected_full_name == f"{first_name} {last_name}"
+    assert content["data"]["me"]["fullName"] == expected_full_name
 
 
 def test_me_full_name_anonymous(api_client):
@@ -223,9 +228,15 @@ def test_user_full_name_in_generated_schema():
 
     # when
     schema = schema_path.read_text()
-    user_block = schema.split("type User {", 1)[1].split("\n}", 1)[0]
+    match = re.search(
+        r"^type User\b[^{]*\{(?P<body>.*?)^\}",
+        schema,
+        re.DOTALL | re.MULTILINE,
+    )
 
     # then
+    assert match is not None
+    user_block = match.group("body")
     assert "fullName: String!" in user_block
 
 
