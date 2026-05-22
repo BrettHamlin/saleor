@@ -335,6 +335,9 @@ class User(ModelObjectType[models.User]):
     last_name = graphene.String(
         required=True, description="The family name of the address."
     )
+    full_name = graphene.String(
+        required=True, description="The full name of the user." + ADDED_IN_322
+    )
     is_staff = graphene.Boolean(
         required=True, description="Determine if the user is a staff admin."
     )
@@ -487,6 +490,10 @@ class User(ModelObjectType[models.User]):
         interfaces = [relay.Node, ObjectWithMetadata]
         model = get_user_model()
         doc_category = DOC_CATEGORY_USERS
+
+    @staticmethod
+    def resolve_full_name(root: models.User, _info: ResolveInfo) -> str:
+        return root.get_full_name()
 
     @staticmethod
     def resolve_addresses(root: models.User, _info: ResolveInfo):
