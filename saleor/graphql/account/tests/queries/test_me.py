@@ -1,4 +1,5 @@
 from decimal import Decimal
+from pathlib import Path
 from unittest import mock
 
 import graphene
@@ -43,6 +44,49 @@ ME_QUERY = """
     }
 """
 
+ME_FULL_NAME_QUERY = """
+    query Me {
+        me {
+            fullName
+        }
+    }
+"""
+
+ME_FIRST_AND_LAST_NAME_QUERY = """
+    query Me {
+        me {
+            firstName
+            lastName
+        }
+    }
+"""
+
+USER_FULL_NAME_QUERY = """
+    query UserFullName($id: ID!) {
+        user(id: $id) {
+            fullName
+        }
+    }
+"""
+
+USER_TYPE_INTROSPECTION_QUERY = """
+    query UserTypeIntrospection {
+        __type(name: "User") {
+            fields {
+                name
+                description
+                type {
+                    kind
+                    ofType {
+                        kind
+                        name
+                    }
+                }
+            }
+        }
+    }
+"""
+
 
 def test_me_query(user_api_client):
     response = user_api_client.post_graphql(ME_QUERY)
@@ -69,6 +113,120 @@ def test_me_query_anonymous_client(api_client):
     response = api_client.post_graphql(ME_QUERY)
     content = get_graphql_content(response)
     assert content["data"]["me"] is None
+
+
+def test_me_full_name_authenticated(user_api_client):
+    # harness:criterion=c-fullname-resolver-delegates-to-model,c-fullname-authenticated-me-query,c-fullname-no-permissions-field
+    # given
+    user = user_api_client.user
+    user.first_name = "Ada"
+    user.last_name = "Lovelace"
+    user.save(update_fields=["first_name", "last_name"])
+
+    # when
+    response = user_api_client.post_graphql(ME_FULL_NAME_QUERY)
+
+    # then
+    content = get_graphql_content(response)
+    assert content["data"]["me"]["fullName"] == user.get_full_name()
+
+
+def test_me_full_name_uses_model_fallback(user_api_client, address):
+    # harness:criterion=c-fullname-resolver-delegates-to-model
+    # given
+    user = user_api_client.user
+    address.first_name = "Mary"
+    address.last_name = "Jackson"
+    address.save(update_fields=["first_name", "last_name"])
+    user.first_name = ""
+    user.last_name = ""
+    user.default_billing_address = address
+    user.save(
+        update_fields=["first_name", "last_name", "default_billing_address"]
+    )
+
+    # when
+    response = user_api_client.post_graphql(ME_FULL_NAME_QUERY)
+
+    # then
+    content = get_graphql_content(response)
+    assert content["data"]["me"]["fullName"] == user.get_full_name()
+
+
+def test_me_full_name_anonymous(api_client):
+    # harness:criterion=c-fullname-anonymous-me-query
+    # when
+    response = api_client.post_graphql(ME_FULL_NAME_QUERY)
+
+    # then
+    content = get_graphql_content(response)
+    assert content["data"]["me"] is None
+
+
+def test_me_first_and_last_name(user_api_client):
+    # harness:criterion=c-fullname-no-existing-field-regression
+    # given
+    user = user_api_client.user
+    user.first_name = "Grace"
+    user.last_name = "Hopper"
+    user.save(update_fields=["first_name", "last_name"])
+
+    # when
+    response = user_api_client.post_graphql(ME_FIRST_AND_LAST_NAME_QUERY)
+
+    # then
+    content = get_graphql_content(response)
+    assert content["data"]["me"]["firstName"] == user.first_name
+    assert content["data"]["me"]["lastName"] == user.last_name
+
+
+def test_user_full_name_query(staff_api_client, customer_user, permission_manage_users):
+    # harness:criterion=c-fullname-available-on-user-query
+    # given
+    customer_user.first_name = "Katherine"
+    customer_user.last_name = "Johnson"
+    customer_user.save(update_fields=["first_name", "last_name"])
+    user_id = graphene.Node.to_global_id("User", customer_user.pk)
+    variables = {"id": user_id}
+
+    # when
+    response = staff_api_client.post_graphql(
+        USER_FULL_NAME_QUERY, variables, permissions=[permission_manage_users]
+    )
+
+    # then
+    content = get_graphql_content(response)
+    full_name = content["data"]["user"]["fullName"]
+    assert isinstance(full_name, str)
+    assert full_name == customer_user.get_full_name()
+
+
+def test_user_full_name_introspection(api_client):
+    # harness:criterion=c-fullname-field-exists-in-user-type,c-fullname-description-added-in-322
+    # when
+    response = api_client.post_graphql(USER_TYPE_INTROSPECTION_QUERY)
+
+    # then
+    content = get_graphql_content(response)
+    fields = {field["name"]: field for field in content["data"]["__type"]["fields"]}
+    field = fields["fullName"]
+    assert field["type"]["kind"] == "NON_NULL"
+    assert field["type"]["ofType"]["kind"] == "SCALAR"
+    assert field["type"]["ofType"]["name"] == "String"
+    assert "Added in Saleor 3.22" in field["description"]
+
+
+def test_user_full_name_in_generated_schema():
+    # harness:criterion=c-fullname-schema-graphql-regenerated
+    # given
+    schema_path = Path(__file__).parents[3] / "schema.graphql"
+
+    # when
+    schema = schema_path.read_text()
+    user_block = schema.split("type User {", 1)[1].split("\n}", 1)[0]
+
+    # then
+    assert "fullName: String!" in user_block
 
 
 def test_me_query_customer_can_not_see_note(
