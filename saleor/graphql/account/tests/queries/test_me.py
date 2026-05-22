@@ -1,4 +1,5 @@
 from decimal import Decimal
+from pathlib import Path
 from unittest import mock
 
 import graphene
@@ -18,6 +19,8 @@ from .....payment.interface import (
 from .....tax.calculations.order import update_order_prices_with_flat_rates
 from ....payment.enums import TokenizedPaymentFlowEnum
 from ....tests.utils import assert_no_permission, get_graphql_content
+
+GRAPHQL_SCHEMA_PATH = Path(__file__).resolve().parents[3] / "schema.graphql"
 
 ME_QUERY = """
     query Me {
@@ -42,6 +45,72 @@ ME_QUERY = """
         }
     }
 """
+
+
+ME_FULLNAME_QUERY = """
+    query Me {
+        me {
+            fullName
+        }
+    }
+"""
+
+
+ME_NAMES_QUERY = """
+    query Me {
+        me {
+            firstName
+            lastName
+            fullName
+        }
+    }
+"""
+
+
+USER_TYPE_FIELDS_QUERY = """
+    query UserTypeFields {
+        __type(name: "User") {
+            fields {
+                name
+                description
+                type {
+                    kind
+                    name
+                    ofType {
+                        kind
+                        name
+                    }
+                }
+            }
+        }
+    }
+"""
+
+
+ROOT_FIELD_NAMES_QUERY = """
+    query RootFieldNames {
+        __schema {
+            queryType {
+                fields {
+                    name
+                }
+            }
+            mutationType {
+                fields {
+                    name
+                }
+            }
+        }
+    }
+"""
+
+
+def _get_schema_type_block(type_name):
+    schema = GRAPHQL_SCHEMA_PATH.read_text()
+    start = schema.index(f"type {type_name}")
+    start = schema.index("{", start)
+    end = schema.index("\n}", start)
+    return schema[start:end]
 
 
 def test_me_query(user_api_client):
@@ -69,6 +138,118 @@ def test_me_query_anonymous_client(api_client):
     response = api_client.post_graphql(ME_QUERY)
     content = get_graphql_content(response)
     assert content["data"]["me"] is None
+
+
+def test_me_query_fullname_authenticated_returns_model_value(user_api_client):
+    # given
+    customer_user = user_api_client.user
+
+    # when
+    response = user_api_client.post_graphql(ME_NAMES_QUERY)
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["me"]
+    # harness:criterion=c-me-fullname-authenticated-returns-model-value
+    # harness:criterion=c-existing-firstname-lastname-fields-preserved
+    # harness:criterion=c-fullname-not-permissions-field
+    # harness:criterion=c-fullname-camelcase-in-schema
+    assert data["fullName"] == customer_user.get_full_name()
+    assert data["firstName"] == customer_user.first_name
+    assert data["lastName"] == customer_user.last_name
+
+
+def test_me_query_fullname_uses_model_fallback_to_billing_address(
+    user_api_client, address
+):
+    # given
+    customer_user = user_api_client.user
+    first_name = "Arnold"
+    last_name = "Green"
+    address.first_name = first_name
+    address.last_name = last_name
+    address.save(update_fields=["first_name", "last_name"])
+    customer_user.first_name = ""
+    customer_user.last_name = ""
+    customer_user.default_billing_address = address
+    customer_user.save(
+        update_fields=["first_name", "last_name", "default_billing_address"]
+    )
+
+    # when
+    response = user_api_client.post_graphql(ME_FULLNAME_QUERY)
+
+    # then
+    content = get_graphql_content(response)
+    # harness:criterion=c-fullname-resolver-delegates-to-model
+    assert content["data"]["me"]["fullName"] == customer_user.get_full_name()
+
+
+def test_me_query_fullname_anonymous_returns_null(api_client):
+    # when
+    response = api_client.post_graphql(ME_FULLNAME_QUERY)
+
+    # then
+    content = get_graphql_content(response)
+    # harness:criterion=c-me-fullname-anonymous-returns-null
+    assert content["data"]["me"] is None
+
+
+def test_user_type_contains_fullname_field_with_description(api_client):
+    # when
+    response = api_client.post_graphql(USER_TYPE_FIELDS_QUERY)
+
+    # then
+    content = get_graphql_content(response)
+    fields = {
+        field["name"]: field for field in content["data"]["__type"]["fields"]
+    }
+    # harness:criterion=c-fullname-field-on-user-type
+    # harness:criterion=c-fullname-field-description-includes-added-in
+    # harness:criterion=c-schema-sdl-regenerated
+    # harness:criterion=c-existing-firstname-lastname-fields-preserved
+    # harness:criterion=c-fullname-camelcase-in-schema
+    assert "fullName" in fields
+    assert "full_name" not in fields
+    assert "firstName" in fields
+    assert "lastName" in fields
+    assert "Added in Saleor" in fields["fullName"]["description"]
+    assert fields["fullName"]["type"]["kind"] == "SCALAR"
+    assert fields["fullName"]["type"]["name"] == "String"
+
+
+def test_fullname_is_not_root_query_or_mutation_field(api_client):
+    # when
+    response = api_client.post_graphql(ROOT_FIELD_NAMES_QUERY)
+
+    # then
+    content = get_graphql_content(response)
+    schema = content["data"]["__schema"]
+    query_fields = {field["name"] for field in schema["queryType"]["fields"]}
+    mutation_fields = {field["name"] for field in schema["mutationType"]["fields"]}
+    # harness:criterion=c-fullname-no-new-query-entry-points
+    assert "fullName" not in query_fields
+    assert "fullName" not in mutation_fields
+
+
+def test_schema_sdl_exposes_fullname_on_user_only():
+    # given
+    user_block = _get_schema_type_block("User")
+    query_block = _get_schema_type_block("Query")
+    mutation_block = _get_schema_type_block("Mutation")
+
+    # then
+    # harness:criterion=c-fullname-field-on-user-type
+    # harness:criterion=c-schema-sdl-regenerated
+    # harness:criterion=c-existing-firstname-lastname-fields-preserved
+    # harness:criterion=c-fullname-camelcase-in-schema
+    # harness:criterion=c-fullname-no-new-query-entry-points
+    assert "fullName" in user_block
+    assert "full_name" not in user_block
+    assert "firstName" in user_block
+    assert "lastName" in user_block
+    assert "fullName" not in query_block
+    assert "fullName" not in mutation_block
 
 
 def test_me_query_customer_can_not_see_note(

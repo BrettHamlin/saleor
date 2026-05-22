@@ -35,7 +35,12 @@ from ..core.connection import (
     filter_connection_queryset,
 )
 from ..core.context import SyncWebhookControlContext, get_database_connection_name
-from ..core.descriptions import ADDED_IN_319, ADDED_IN_322, PREVIEW_FEATURE
+from ..core.descriptions import (
+    ADDED_IN_319,
+    ADDED_IN_322,
+    ADDED_IN_324,
+    PREVIEW_FEATURE,
+)
 from ..core.doc_category import DOC_CATEGORY_USERS
 from ..core.enums import LanguageCodeEnum
 from ..core.federation import federated_entity, resolve_federation_references
@@ -335,6 +340,7 @@ class User(ModelObjectType[models.User]):
     last_name = graphene.String(
         required=True, description="The family name of the address."
     )
+    full_name = graphene.String(description="The full name of the user." + ADDED_IN_324)
     is_staff = graphene.Boolean(
         required=True, description="Determine if the user is a staff admin."
     )
@@ -487,6 +493,10 @@ class User(ModelObjectType[models.User]):
         interfaces = [relay.Node, ObjectWithMetadata]
         model = get_user_model()
         doc_category = DOC_CATEGORY_USERS
+
+    @staticmethod
+    def resolve_full_name(root: models.User, _info: ResolveInfo):
+        return root.get_full_name()
 
     @staticmethod
     def resolve_addresses(root: models.User, _info: ResolveInfo):
