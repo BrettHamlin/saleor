@@ -1,0 +1,29 @@
+name: Gridfire Build
+
+# gridfire_template_version: stage3-py-django-api/v1
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Git ref to build
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Compile Django sources
+        run: uv run python -m compileall saleor
+
